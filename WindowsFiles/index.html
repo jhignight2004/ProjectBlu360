@@ -1,0 +1,362 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>WebUSB Xbox 360 → ViGEm Bridge</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+      }
+      button {
+        margin-right: 8px;
+      }
+      pre {
+        background: #111;
+        color: #0f0;
+        padding: 12px;
+        border-radius: 8px;
+        max-height: 60vh;
+        overflow: auto;
+      }
+      .row {
+        margin: 10px 0;
+      }
+      input {
+        width: 340px;
+      }
+      .dim {
+        opacity: 0.75;
+      }
+      code {
+        background: #eee;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <button id="connect">Connect WebUSB</button>
+      <button id="disconnect" disabled>Disconnect</button>
+    </div>
+
+    <div class="row">
+      <label class="dim">Bridge WebSocket:</label>
+      <input id="wsurl" value="ws://127.0.0.1:8765/ws/" />
+      <button id="wsconnect">Connect WS</button>
+      <span id="wsstatus" class="dim">WS: disconnected</span>
+    </div>
+
+    <div class="row dim">Vendor/Product: <code id="vp"></code></div>
+
+    <pre id="out"></pre>
+
+    <script>
+      // Matches your Linux bridge constants
+      const VID = 0x045e;
+      const PID = 0x028f;
+
+      // If claimInterface(0) fails, change this to the correct interface number.
+      const USB_INTERFACE = 0;
+
+      // Poll interval (ms)
+      const POLL_MS = 2;
+
+      // --- UI helpers ---
+      const out = document.getElementById("out");
+      const log = (s) => {
+        out.textContent += s + "\n";
+        out.scrollTop = out.scrollHeight;
+      };
+
+      document.getElementById("vp").textContent =
+        `VID=0x${VID.toString(16).padStart(4, "0")} PID=0x${PID.toString(16).padStart(4, "0")}`;
+
+      // --- WebSocket to local bridge ---
+      let ws = null;
+      const wsStatusEl = document.getElementById("wsstatus");
+      const wsUrlEl = document.getElementById("wsurl");
+
+      function setWsStatus() {
+        const st = ws ? ws.readyState : -1;
+        const s =
+          st === WebSocket.CONNECTING
+            ? "connecting"
+            : st === WebSocket.OPEN
+              ? "connected"
+              : st === WebSocket.CLOSING
+                ? "closing"
+                : st === WebSocket.CLOSED
+                  ? "disconnected"
+                  : "disconnected";
+        wsStatusEl.textContent = "WS: " + s;
+      }
+
+      function connectWS() {
+        const url = wsUrlEl.value.trim();
+        if (!url) {
+          log("WS Error: empty URL");
+          return;
+        }
+
+        if (
+          ws &&
+          (ws.readyState === WebSocket.OPEN ||
+            ws.readyState === WebSocket.CONNECTING)
+        ) {
+          log("WS: already open/connecting");
+          return;
+        }
+
+        try {
+          ws = new WebSocket(url);
+          setWsStatus();
+          ws.onopen = () => {
+            setWsStatus();
+            log("WS: connected");
+          };
+          ws.onclose = () => {
+            setWsStatus();
+            log("WS: closed");
+          };
+          ws.onerror = () => {
+            setWsStatus();
+            log("WS: error");
+          };
+        } catch (e) {
+          log("WS Error: " + (e && e.message ? e.message : String(e)));
+        }
+      }
+
+      function wsSend(obj) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+        ws.send(JSON.stringify(obj));
+        return true;
+      }
+
+      document.getElementById("wsconnect").onclick = connectWS;
+      setWsStatus();
+
+      // --- WebUSB ---
+      let dev = null;
+      let running = false;
+
+      async function sleep(ms) {
+        return new Promise((r) => setTimeout(r, ms));
+      }
+
+      // --- Helpers to match your C code ---
+      function s16le(u8, off) {
+        const v = (u8[off] | (u8[off + 1] << 8)) & 0xffff;
+        return v & 0x8000 ? v - 0x10000 : v;
+      }
+
+      function u32le(u8, off) {
+        return (
+          (u8[off] |
+            (u8[off + 1] << 8) |
+            (u8[off + 2] << 16) |
+            (u8[off + 3] << 24)) >>>
+          0
+        );
+      }
+
+      // Normalize:
+      //  sticks: int16 -> [-1..+1]
+      //  triggers: uint8 -> [0..1]
+      function normStick(s16) {
+        // handle -32768 cleanly
+        if (s16 <= -32768) return -1;
+        if (s16 >= 32767) return 1;
+        return s16 / 32767;
+      }
+      function normTrig(u8) {
+        return Math.max(0, Math.min(1, u8 / 255));
+      }
+
+      // D-pad bits (from your hat_from_dpad logic)
+      const DPAD_UP = 0x00000001;
+      const DPAD_DOWN = 0x00000002;
+      const DPAD_LEFT = 0x00000004;
+      const DPAD_RIGHT = 0x00000008;
+
+      // Button bits (from your C bindings)
+      const BTN_LB = 0x00000100;
+      const BTN_RB = 0x00000200;
+      const BTN_GUIDE = 0x00000400;
+      const BTN_BACK = 0x00000020;
+      const BTN_START = 0x00000010;
+      const BTN_L3 = 0x00000040;
+      const BTN_R3 = 0x00000080;
+
+      const BTN_A = 0x00001000;
+      const BTN_B = 0x00002000;
+      const BTN_X = 0x00004000;
+      const BTN_Y = 0x00008000;
+
+      // Decode the 20-byte report exactly like your Linux bridge:
+      // u32 btn @ offset 2
+      // lt @ 4, rt @ 5
+      // lx @ 6, ly @ 8, rx @ 10, ry @ 12 (signed 16-bit)
+      function decodeToState(report20) {
+        const btn = u32le(report20, 2);
+
+        const lt = report20[4];
+        const rt = report20[5];
+
+        const lx = s16le(report20, 6);
+        const ly = s16le(report20, 8);
+        const rx = s16le(report20, 10);
+        const ry = s16le(report20, 12);
+
+        // Your Linux bridge inverts Y axes: ABS_Y = -ly, ABS_RY = -ry
+        // Do the same so "up" becomes positive.
+        const lxN = normStick(lx);
+        const lyN = normStick(ly);
+        const rxN = normStick(rx);
+        const ryN = normStick(ry);
+
+        const state = {
+          buttons: {
+            // face
+            a: !!(btn & BTN_A),
+            b: !!(btn & BTN_B),
+            x: !!(btn & BTN_X),
+            y: !!(btn & BTN_Y),
+
+            // shoulders
+            lb: !!(btn & BTN_LB),
+            rb: !!(btn & BTN_RB),
+
+            // start/back
+            start: !!(btn & BTN_START),
+            back: !!(btn & BTN_BACK),
+
+            // stick clicks
+            ls: !!(btn & BTN_L3),
+            rs: !!(btn & BTN_R3),
+
+            // dpad as digital (also fine if you later map to POV/hat)
+            up: !!(btn & DPAD_UP),
+            down: !!(btn & DPAD_DOWN),
+            left: !!(btn & DPAD_LEFT),
+            right: !!(btn & DPAD_RIGHT),
+
+            // OPTIONAL: guide (your current C# bridge must be updated to read this key)
+            guide: !!(btn & BTN_GUIDE),
+          },
+          axes: {
+            lx: lxN,
+            ly: lyN,
+            rx: rxN,
+            ry: ryN,
+            lt: normTrig(lt),
+            rt: normTrig(rt),
+          },
+        };
+
+        return state;
+      }
+
+      async function connectWebUSB() {
+        try {
+          dev = await navigator.usb.requestDevice({
+            filters: [{ vendorId: VID, productId: PID }],
+          });
+
+          await dev.open();
+
+          if (dev.configuration === null) {
+            await dev.selectConfiguration(1);
+          }
+
+          await dev.claimInterface(USB_INTERFACE);
+
+          // Enable/arm: bmRequestType=0x40, bRequest=0x48, wValue=0x0006, wIndex=0
+          await dev.controlTransferOut({
+            requestType: "vendor",
+            recipient: "device",
+            request: 0x48,
+            value: 0x0006,
+            index: 0,
+          });
+
+          log("WebUSB: enabled.");
+          document.getElementById("connect").disabled = true;
+          document.getElementById("disconnect").disabled = false;
+
+          if (!ws || ws.readyState !== WebSocket.OPEN) {
+            log("WS: connecting...");
+            connectWS();
+          }
+
+          running = true;
+          log("Starting poll...");
+
+          while (running) {
+            const res = await dev.controlTransferIn(
+              {
+                requestType: "vendor",
+                recipient: "device",
+                request: 0xc2,
+                value: 0x0000,
+                index: 0,
+              },
+              20,
+            );
+
+            if (res.status !== "ok") {
+              log("WebUSB read status: " + res.status);
+              break;
+            }
+
+            const bytes = new Uint8Array(res.data.buffer);
+            const state = decodeToState(bytes);
+
+            // Send decoded state to the local bridge (if connected)
+            wsSend(state);
+
+            await sleep(POLL_MS);
+          }
+        } catch (e) {
+          log("Error: " + (e && e.message ? e.message : String(e)));
+          cleanup();
+        }
+      }
+
+      async function disconnectWebUSB() {
+        running = false;
+
+        try {
+          if (dev) {
+            try {
+              await dev.releaseInterface(USB_INTERFACE);
+            } catch {}
+            try {
+              await dev.close();
+            } catch {}
+          }
+        } finally {
+          dev = null;
+          cleanup();
+          log("WebUSB: disconnected.");
+        }
+      }
+
+      function cleanup() {
+        document.getElementById("connect").disabled = false;
+        document.getElementById("disconnect").disabled = true;
+      }
+
+      document.getElementById("connect").onclick = connectWebUSB;
+      document.getElementById("disconnect").onclick = disconnectWebUSB;
+
+      navigator.usb.addEventListener("disconnect", (event) => {
+        if (dev && event.device === dev) {
+          log("WebUSB: device unplugged.");
+          disconnectWebUSB();
+        }
+      });
+    </script>
+  </body>
+</html>

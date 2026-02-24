@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "7SdSun5m49Q=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\Jason\\Desktop\\allthethings\\projectblu360\\WebUsbToVigem\\WebUsbToVigem.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\Jason\\.nuget\\packages\\nefarius.vigem.client\\1.21.256\\nefarius.vigem.client.1.21.256.nupkg.sha512"
+  ],
+  "logs": []
+}

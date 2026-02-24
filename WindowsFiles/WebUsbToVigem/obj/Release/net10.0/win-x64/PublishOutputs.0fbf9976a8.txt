@@ -1,0 +1,2 @@
+C:\Users\Jason\Desktop\allthethings\projectblu360\WebUsbToVigem\bin\Release\net10.0\win-x64\publish\WebUsbToVigem.pdb
+C:\Users\Jason\Desktop\allthethings\projectblu360\WebUsbToVigem\bin\Release\net10.0\win-x64\publish\WebUsbToVigem.exe
