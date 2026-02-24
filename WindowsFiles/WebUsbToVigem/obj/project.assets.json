@@ -39,11 +39,11 @@
   "project": {
     "version": "1.0.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\Jason\\Desktop\\allthethings\\projectblu360\\WebUsbToVigem\\WebUsbToVigem.csproj",
+      "projectUniqueName": "C:\\Users\\Jason\\Desktop\\allthethings\\projectblu360\\WindowsFiles\\WebUsbToVigem\\WebUsbToVigem.csproj",
       "projectName": "WebUsbToVigem",
-      "projectPath": "C:\\Users\\Jason\\Desktop\\allthethings\\projectblu360\\WebUsbToVigem\\WebUsbToVigem.csproj",
+      "projectPath": "C:\\Users\\Jason\\Desktop\\allthethings\\projectblu360\\WindowsFiles\\WebUsbToVigem\\WebUsbToVigem.csproj",
       "packagesPath": "C:\\Users\\Jason\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\Jason\\Desktop\\allthethings\\projectblu360\\WebUsbToVigem\\obj\\",
+      "outputPath": "C:\\Users\\Jason\\Desktop\\allthethings\\projectblu360\\WindowsFiles\\WebUsbToVigem\\obj\\",
       "projectStyle": "PackageReference",
       "configFilePaths": [
         "C:\\Users\\Jason\\AppData\\Roaming\\NuGet\\NuGet.Config"

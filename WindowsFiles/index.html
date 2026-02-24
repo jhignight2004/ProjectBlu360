@@ -15,8 +15,9 @@
         color: #0f0;
         padding: 12px;
         border-radius: 8px;
-        max-height: 60vh;
+        max-height: 40vh;
         overflow: auto;
+        margin: 8px 0;
       }
       .row {
         margin: 10px 0;
@@ -31,6 +32,21 @@
         background: #eee;
         padding: 2px 6px;
         border-radius: 6px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .card {
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 10px;
+      }
+      .mono {
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
       }
     </style>
   </head>
@@ -49,7 +65,19 @@
 
     <div class="row dim">Vendor/Product: <code id="vp"></code></div>
 
-    <pre id="out"></pre>
+    <div class="grid">
+      <div class="card">
+        <div class="dim">Log</div>
+        <pre id="out"></pre>
+      </div>
+
+      <div class="card">
+        <div class="dim">Decoded state (live)</div>
+        <div id="liveLine" class="mono dim"></div>
+        <div id="rate" class="mono dim" style="margin-top: 6px"></div>
+        <pre id="state"></pre>
+      </div>
+    </div>
 
     <script>
       // Matches your Linux bridge constants
@@ -64,6 +92,10 @@
 
       // --- UI helpers ---
       const out = document.getElementById("out");
+      const statePre = document.getElementById("state");
+      const liveLine = document.getElementById("liveLine");
+      const rateEl = document.getElementById("rate");
+
       const log = (s) => {
         out.textContent += s + "\n";
         out.scrollTop = out.scrollHeight;
@@ -71,6 +103,41 @@
 
       document.getElementById("vp").textContent =
         `VID=0x${VID.toString(16).padStart(4, "0")} PID=0x${PID.toString(16).padStart(4, "0")}`;
+
+      function fmt(n, digits = 3) {
+        return (Number.isFinite(n) ? n : 0).toFixed(digits);
+      }
+
+      function renderState(state) {
+        // Pretty JSON
+        statePre.textContent = JSON.stringify(state, null, 2);
+
+        // Compact one-liner that’s easy to glance at
+        const b = state.buttons;
+        const a = state.axes;
+
+        const pressed = [];
+        if (b.a) pressed.push("A");
+        if (b.b) pressed.push("B");
+        if (b.x) pressed.push("X");
+        if (b.y) pressed.push("Y");
+        if (b.lb) pressed.push("LB");
+        if (b.rb) pressed.push("RB");
+        if (b.back) pressed.push("Back");
+        if (b.start) pressed.push("Start");
+        if (b.ls) pressed.push("LS");
+        if (b.rs) pressed.push("RS");
+        if (b.guide) pressed.push("Guide");
+        if (b.up) pressed.push("D↑");
+        if (b.down) pressed.push("D↓");
+        if (b.left) pressed.push("D←");
+        if (b.right) pressed.push("D→");
+
+        liveLine.textContent =
+          `LX ${fmt(a.lx)}  LY ${fmt(a.ly)}  RX ${fmt(a.rx)}  RY ${fmt(a.ry)}  ` +
+          `LT ${fmt(a.lt, 3)}  RT ${fmt(a.rt, 3)}  |  ` +
+          `Buttons: ${pressed.length ? pressed.join(" ") : "(none)"}`;
+      }
 
       // --- WebSocket to local bridge ---
       let ws = null;
@@ -165,7 +232,6 @@
       //  sticks: int16 -> [-1..+1]
       //  triggers: uint8 -> [0..1]
       function normStick(s16) {
-        // handle -32768 cleanly
         if (s16 <= -32768) return -1;
         if (s16 >= 32767) return 1;
         return s16 / 32767;
@@ -209,53 +275,54 @@
         const rx = s16le(report20, 10);
         const ry = s16le(report20, 12);
 
-        // Your Linux bridge inverts Y axes: ABS_Y = -ly, ABS_RY = -ry
-        // Do the same so "up" becomes positive.
-        const lxN = normStick(lx);
-        const lyN = normStick(ly);
-        const rxN = normStick(rx);
-        const ryN = normStick(ry);
-
         const state = {
           buttons: {
-            // face
             a: !!(btn & BTN_A),
             b: !!(btn & BTN_B),
             x: !!(btn & BTN_X),
             y: !!(btn & BTN_Y),
 
-            // shoulders
             lb: !!(btn & BTN_LB),
             rb: !!(btn & BTN_RB),
 
-            // start/back
             start: !!(btn & BTN_START),
             back: !!(btn & BTN_BACK),
 
-            // stick clicks
             ls: !!(btn & BTN_L3),
             rs: !!(btn & BTN_R3),
 
-            // dpad as digital (also fine if you later map to POV/hat)
             up: !!(btn & DPAD_UP),
             down: !!(btn & DPAD_DOWN),
             left: !!(btn & DPAD_LEFT),
             right: !!(btn & DPAD_RIGHT),
 
-            // OPTIONAL: guide (your current C# bridge must be updated to read this key)
             guide: !!(btn & BTN_GUIDE),
           },
           axes: {
-            lx: lxN,
-            ly: lyN,
-            rx: rxN,
-            ry: ryN,
+            lx: normStick(lx),
+            ly: normStick(ly),
+            rx: normStick(rx),
+            ry: normStick(ry),
             lt: normTrig(lt),
             rt: normTrig(rt),
           },
         };
 
         return state;
+      }
+
+      // Simple poll-rate meter (updates ~2x/sec)
+      let sampleCount = 0;
+      let lastRateT = performance.now();
+      function tickRate() {
+        sampleCount++;
+        const now = performance.now();
+        if (now - lastRateT >= 500) {
+          const hz = (sampleCount * 1000) / (now - lastRateT);
+          rateEl.textContent = `Poll rate: ${hz.toFixed(1)} Hz (target ~${(1000 / POLL_MS).toFixed(1)} Hz)`;
+          sampleCount = 0;
+          lastRateT = now;
+        }
       }
 
       async function connectWebUSB() {
@@ -313,6 +380,10 @@
             const bytes = new Uint8Array(res.data.buffer);
             const state = decodeToState(bytes);
 
+            // NEW: render on-page
+            renderState(state);
+            tickRate();
+
             // Send decoded state to the local bridge (if connected)
             wsSend(state);
 
@@ -340,6 +411,9 @@
           dev = null;
           cleanup();
           log("WebUSB: disconnected.");
+          liveLine.textContent = "";
+          rateEl.textContent = "";
+          statePre.textContent = "";
         }
       }
 

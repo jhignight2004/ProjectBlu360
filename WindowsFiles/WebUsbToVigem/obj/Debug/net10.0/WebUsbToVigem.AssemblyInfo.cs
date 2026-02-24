@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("WebUsbToVigem")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2e27959ad5d262956c2974eab5594ba7c4058448")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+c1fe3fe2160d9ebd8aebe87c79a7daa271ccfed5")]
 [assembly: System.Reflection.AssemblyProductAttribute("WebUsbToVigem")]
 [assembly: System.Reflection.AssemblyTitleAttribute("WebUsbToVigem")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
