@@ -6,6 +6,8 @@
     <style>
       body {
         font-family: system-ui, sans-serif;
+        background-color: #1e1e1e;
+        color: #ffffff;
       }
       button {
         margin-right: 8px;
@@ -29,7 +31,7 @@
         opacity: 0.75;
       }
       code {
-        background: #eee;
+        background: #404040;
         padding: 2px 6px;
         border-radius: 6px;
       }
@@ -39,7 +41,7 @@
         gap: 10px;
       }
       .card {
-        border: 1px solid #ddd;
+        border: 1px solid #404040;
         border-radius: 10px;
         padding: 10px;
       }
@@ -52,7 +54,7 @@
   </head>
   <body>
     <div class="row">
-      <button id="connect">Connect WebUSB</button>
+      <button id="connect">Connect Xbox 360 Wireless Controller</button>
       <button id="disconnect" disabled>Disconnect</button>
     </div>
 
@@ -61,6 +63,18 @@
       <input id="wsurl" value="ws://127.0.0.1:8765/ws/" />
       <button id="wsconnect">Connect WS</button>
       <span id="wsstatus" class="dim">WS: disconnected</span>
+    </div>
+
+    <div class="row">
+      <label class="dim"
+        >Make sure you use Zadig to install the WinUSB driver!</label
+      >
+    </div>
+
+    <div class="row">
+      <label class="dim">
+        Note: Browsers can sometimes throttle background tabs.
+      </label>
     </div>
 
     <div class="row dim">Vendor/Product: <code id="vp"></code></div>
@@ -80,15 +94,11 @@
     </div>
 
     <script>
-      // Matches your Linux bridge constants
+      // 360 VID and PID
       const VID = 0x045e;
       const PID = 0x028f;
 
-      // If claimInterface(0) fails, change this to the correct interface number.
       const USB_INTERFACE = 0;
-
-      // Poll interval (ms)
-      const POLL_MS = 2;
 
       // --- UI helpers ---
       const out = document.getElementById("out");
@@ -112,7 +122,7 @@
         // Pretty JSON
         statePre.textContent = JSON.stringify(state, null, 2);
 
-        // Compact one-liner that’s easy to glance at
+        // Compact one-liner
         const b = state.buttons;
         const a = state.axes;
 
@@ -178,6 +188,7 @@
         try {
           ws = new WebSocket(url);
           setWsStatus();
+
           ws.onopen = () => {
             setWsStatus();
             log("WS: connected");
@@ -195,9 +206,20 @@
         }
       }
 
-      function wsSend(obj) {
+      // Send logic: keep newest only, drop if WS is backing up, and cap send rate.
+      let lastSentAt = performance.now();
+      function wsSendLatest(state) {
         if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-        ws.send(JSON.stringify(obj));
+
+        // If bufferedAmount grows, we're behind. Drop frames to avoid "bursty" stale inputs.
+        if (ws.bufferedAmount > 128 * 1024) return false;
+
+        // Cap send rate (prevents burst spam when tab regains focus)
+        const now = performance.now();
+        if (now - lastSentAt < 4) return false; // ~250 Hz max
+        lastSentAt = now;
+
+        ws.send(JSON.stringify(state));
         return true;
       }
 
@@ -208,11 +230,6 @@
       let dev = null;
       let running = false;
 
-      async function sleep(ms) {
-        return new Promise((r) => setTimeout(r, ms));
-      }
-
-      // --- Helpers to match your C code ---
       function s16le(u8, off) {
         const v = (u8[off] | (u8[off + 1] << 8)) & 0xffff;
         return v & 0x8000 ? v - 0x10000 : v;
@@ -240,13 +257,13 @@
         return Math.max(0, Math.min(1, u8 / 255));
       }
 
-      // D-pad bits (from your hat_from_dpad logic)
+      // D-pad bits
       const DPAD_UP = 0x00000001;
       const DPAD_DOWN = 0x00000002;
       const DPAD_LEFT = 0x00000004;
       const DPAD_RIGHT = 0x00000008;
 
-      // Button bits (from your C bindings)
+      // Button bits
       const BTN_LB = 0x00000100;
       const BTN_RB = 0x00000200;
       const BTN_GUIDE = 0x00000400;
@@ -260,7 +277,6 @@
       const BTN_X = 0x00004000;
       const BTN_Y = 0x00008000;
 
-      // Decode the 20-byte report exactly like your Linux bridge:
       // u32 btn @ offset 2
       // lt @ 4, rt @ 5
       // lx @ 6, ly @ 8, rx @ 10, ry @ 12 (signed 16-bit)
@@ -275,7 +291,7 @@
         const rx = s16le(report20, 10);
         const ry = s16le(report20, 12);
 
-        const state = {
+        return {
           buttons: {
             a: !!(btn & BTN_A),
             b: !!(btn & BTN_B),
@@ -307,8 +323,6 @@
             rt: normTrig(rt),
           },
         };
-
-        return state;
       }
 
       // Simple poll-rate meter (updates ~2x/sec)
@@ -319,7 +333,7 @@
         const now = performance.now();
         if (now - lastRateT >= 500) {
           const hz = (sampleCount * 1000) / (now - lastRateT);
-          rateEl.textContent = `Poll rate: ${hz.toFixed(1)} Hz (target ~${(1000 / POLL_MS).toFixed(1)} Hz)`;
+          rateEl.textContent = `Poll rate: ${hz.toFixed(1)} Hz`;
           sampleCount = 0;
           lastRateT = now;
         }
@@ -339,7 +353,7 @@
 
           await dev.claimInterface(USB_INTERFACE);
 
-          // Enable/arm: bmRequestType=0x40, bRequest=0x48, wValue=0x0006, wIndex=0
+          // Enable: bmRequestType=0x40, bRequest=0x48, wValue=0x0002, wIndex=0
           await dev.controlTransferOut({
             requestType: "vendor",
             recipient: "device",
@@ -360,6 +374,9 @@
           running = true;
           log("Starting poll...");
 
+          // Main poll loop:
+          // - No fixed setTimeout sleep (timers get throttled)
+          // - Drop frames when WS backs up (prevents erratic bursts)
           while (running) {
             const res = await dev.controlTransferIn(
               {
@@ -380,14 +397,14 @@
             const bytes = new Uint8Array(res.data.buffer);
             const state = decodeToState(bytes);
 
-            // NEW: render on-page
             renderState(state);
             tickRate();
 
-            // Send decoded state to the local bridge (if connected)
-            wsSend(state);
+            // Send decoded state to the local bridge (latest-only, drop-on-backpressure)
+            wsSendLatest(state);
 
-            await sleep(POLL_MS);
+            // Tiny yield occasionally to keep UI responsive without relying on timers.
+            if ((sampleCount & 0x3f) === 0) await Promise.resolve();
           }
         } catch (e) {
           log("Error: " + (e && e.message ? e.message : String(e)));

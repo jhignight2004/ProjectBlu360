@@ -1,0 +1,10 @@
+HOW TO USE SOFTWARE
+
+1. Run and install included ViGEmBus driver.
+2. Plug in Xbox 360 Wireless controller via the Play and Charge cable.
+3. Download and run Zadig to replace the "Xbox 360 Wireless Controller via Play & Charge Kit" driver with the WinUSB driver.
+4. Run included "WebUsbToVigem.exe" to start the webserver.
+5. Open "index.html" in your favorite web browser. Click "Connect Xbox 360 Wireless Controller" and select your controller. If this fails, try unplugging and plugging the controller back in.
+6. Click "Connect WS" to link the browser to the running webserver. You should now see your controllers outputs on the browser.
+
+Congrats! You can now use your 360 Wireless controller over the Play n Charge cable.
