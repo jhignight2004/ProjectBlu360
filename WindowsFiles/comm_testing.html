@@ -1,0 +1,718 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Xbox 360 Wireless Receiver WebUSB Vendor Probe</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+      }
+      button {
+        margin-right: 8px;
+      }
+      pre {
+        background: #111;
+        color: #0f0;
+        padding: 12px;
+        border-radius: 8px;
+        max-height: 45vh;
+        overflow: auto;
+        margin: 8px 0;
+      }
+      .row {
+        margin: 10px 0;
+      }
+      input,
+      select {
+        width: 360px;
+      }
+      .dim {
+        opacity: 0.75;
+      }
+      code {
+        background: #eee;
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+      .card {
+        border: 1px solid #ddd;
+        border-radius: 10px;
+        padding: 10px;
+      }
+      .mono {
+        font-family:
+          ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+          "Liberation Mono", "Courier New", monospace;
+      }
+      .warn {
+        color: #b00;
+      }
+      .tight input[type="number"] {
+        width: 130px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="row">
+      <button id="connect">Connect WebUSB</button>
+      <button id="disconnect" disabled>Disconnect</button>
+      <span id="devstatus" class="dim">Device: disconnected</span>
+    </div>
+
+    <div class="row dim">Receiver VID/PID: <code id="vp"></code></div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="dim">Log</div>
+        <pre id="out"></pre>
+      </div>
+
+      <div class="card">
+        <div class="dim">Live poll (vendor IN)</div>
+        <div id="rate" class="mono dim"></div>
+        <pre id="lastin"></pre>
+      </div>
+    </div>
+
+    <div class="grid" style="margin-top: 10px">
+      <div class="card">
+        <div class="dim">Known working</div>
+        <div class="row dim">
+          Enable streaming:
+          <code>vendor OUT request=0x48 value=0x0006 index=0</code>
+        </div>
+        <div class="row dim">
+          Poll: <code>vendor IN request=0xC2 value=0 index=0 length=20</code>
+        </div>
+        <div class="row">
+          <button id="enableNow">Send enable (0x48/0006)</button>
+          <button id="pollOnce">Poll once (0xC2 IN 20)</button>
+        </div>
+
+        <hr />
+
+        <div class="dim">Send ONE vendor request</div>
+
+        <div class="row tight">
+          <label class="dim">Direction:</label>
+          <select id="oneDir">
+            <option value="in">IN (device→host)</option>
+            <option value="out">OUT (host→device)</option>
+          </select>
+        </div>
+
+        <div class="row tight">
+          <label class="dim">bRequest (hex):</label>
+          <input id="oneReq" class="mono" value="C2" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">wValue (hex):</label>
+          <input id="oneVal" class="mono" value="0000" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">wIndex (hex):</label>
+          <input id="oneIdx" class="mono" value="0000" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">IN length (bytes):</label>
+          <input id="oneLen" type="number" min="0" max="4096" value="20" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">OUT data (hex, optional):</label>
+          <input id="oneData" class="mono" value="" />
+        </div>
+
+        <div class="row">
+          <button id="sendOne">Send request</button>
+        </div>
+
+        <hr />
+
+        <div class="dim">Targeted tools</div>
+        <div class="row">
+          <button id="ccDump">CC dump (0x0000..0x00FF, idx=0)</button>
+          <button id="outProbe">OUT probe (0xB0..0xFF)</button>
+        </div>
+
+        <div class="row warn dim">
+          Notes:
+          <ul>
+            <li>
+              Your receiver exposes no endpoints (eps=[]), so only vendor
+              control transfers work.
+            </li>
+            <li>0xCC appears to only support IN length=1 (byte-at-a-time).</li>
+            <li>
+              OUT probe is throttled and only logs requests that succeed
+              (status=ok).
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="dim">Scanner (throttled)</div>
+
+        <div class="row dim">
+          Scan control transfers to find readable IN requests or writable OUT
+          requests. Keep ranges small.
+        </div>
+
+        <div class="row tight">
+          <label class="dim">Delay per request (ms):</label>
+          <input id="scanDelay" type="number" min="5" max="5000" value="25" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">bRequest range (hex):</label>
+          <input id="scanReq" class="mono" value="B0-DF" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">wValue range (hex):</label>
+          <input id="scanVal" class="mono" value="0000-0010" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">wIndex range (hex):</label>
+          <input id="scanIdx" class="mono" value="0000-0002" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">IN lengths to try:</label>
+          <input id="scanLens" class="mono" value="1,2,4,8,16,20,32,64" />
+        </div>
+
+        <div class="row tight">
+          <label class="dim">OUT data patterns:</label>
+          <select id="outPattern">
+            <option value="none">none (no data stage)</option>
+            <option value="zeros1">1 byte zero</option>
+            <option value="zeros2">2 bytes zeros</option>
+            <option value="zeros4">4 bytes zeros</option>
+            <option value="zeros8">8 bytes zeros</option>
+            <option value="inc8">8 bytes incrementing</option>
+            <option value="zeros20">20 bytes zeros</option>
+            <option value="inc20">20 bytes incrementing</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <button id="scanIn">Scan IN</button>
+          <button id="scanOut">Scan OUT</button>
+          <button id="stopScan" disabled>Stop</button>
+          <span id="scanStatus" class="dim">idle</span>
+        </div>
+
+        <div class="row dim">
+          Tip: Run <b>Scan IN</b> first (low risk). Then use <b>OUT probe</b> to
+          find any writable request.
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const VID = 0x045e;
+      const PID = 0x028f;
+
+      const USB_INTERFACE = 0;
+      const POLL_MS = 2;
+
+      const out = document.getElementById("out");
+      const lastInPre = document.getElementById("lastin");
+      const rateEl = document.getElementById("rate");
+      const devStatusEl = document.getElementById("devstatus");
+
+      const log = (s) => {
+        out.textContent += s + "\n";
+        out.scrollTop = out.scrollHeight;
+      };
+
+      document.getElementById("vp").textContent =
+        `VID=0x${VID.toString(16).padStart(4, "0")} PID=0x${PID.toString(16).padStart(4, "0")}`;
+
+      function setDevStatus() {
+        devStatusEl.textContent = dev
+          ? "Device: connected"
+          : "Device: disconnected";
+      }
+
+      function toHex(u8) {
+        return Array.from(u8)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join(" ");
+      }
+
+      function explainUsbError(e) {
+        const name = e?.name || "Error";
+        const msg = e?.message || String(e);
+        return `${name}: ${msg}`;
+      }
+
+      function parseHexInt(str, bits) {
+        const s = str.trim().replace(/^0x/i, "");
+        const v = parseInt(s, 16);
+        if (!Number.isFinite(v)) throw new Error(`Bad hex: "${str}"`);
+        const max = bits === 8 ? 0xff : 0xffff;
+        if (v < 0 || v > max)
+          throw new Error(`Out of range for ${bits}-bit: ${str}`);
+        return v;
+      }
+
+      function parseRangeHex(s) {
+        const t = s.trim();
+        const m = t.match(/^([0-9a-fA-F]+)\s*-\s*([0-9a-fA-F]+)$/);
+        if (m) {
+          const a = parseInt(m[1], 16);
+          const b = parseInt(m[2], 16);
+          if (!(a <= b)) throw new Error("range start > end");
+          return [a, b];
+        }
+        const v = parseInt(t, 16);
+        if (!Number.isFinite(v)) throw new Error("bad hex");
+        return [v, v];
+      }
+
+      function parseHexBytes(str) {
+        const s = str.trim();
+        if (!s) return new Uint8Array([]);
+        const parts = s.split(/[\s,]+/).filter(Boolean);
+        const bytes = parts.map((p) => {
+          const v = parseInt(p, 16);
+          if (!Number.isFinite(v) || v < 0 || v > 255)
+            throw new Error(`Invalid byte: "${p}"`);
+          return v;
+        });
+        return new Uint8Array(bytes);
+      }
+
+      async function sleep(ms) {
+        return new Promise((r) => setTimeout(r, ms));
+      }
+
+      function dumpInterfaces(dev) {
+        const cfg = dev.configuration;
+        log(`Configuration: ${cfg.configurationValue}`);
+        for (const intf of cfg.interfaces) {
+          for (const alt of intf.alternates) {
+            const eps = alt.endpoints
+              .map((ep) => {
+                const dir = ep.direction.toUpperCase();
+                return `${dir} ep#${ep.endpointNumber} (${ep.type})`;
+              })
+              .join(", ");
+            log(
+              `IF=${intf.interfaceNumber} ALT=${alt.alternateSetting} ` +
+                `class=${alt.interfaceClass} sub=${alt.interfaceSubclass} proto=${alt.interfaceProtocol} ` +
+                `eps=[${eps}]`,
+            );
+          }
+        }
+      }
+
+      // --- Device ---
+      let dev = null;
+      let running = false;
+
+      // Rate meter for poll loop
+      let sampleCount = 0;
+      let lastRateT = performance.now();
+      function tickRate() {
+        sampleCount++;
+        const now = performance.now();
+        if (now - lastRateT >= 500) {
+          const hz = (sampleCount * 1000) / (now - lastRateT);
+          rateEl.textContent = `Poll rate: ${hz.toFixed(1)} Hz`;
+          sampleCount = 0;
+          lastRateT = now;
+        }
+      }
+
+      async function vendorOut(req, value, index, dataU8 /* optional */) {
+        const setup = {
+          requestType: "vendor",
+          recipient: "device",
+          request: req & 0xff,
+          value: value & 0xffff,
+          index: index & 0xffff,
+        };
+        if (dataU8 && dataU8.length)
+          return await dev.controlTransferOut(setup, dataU8);
+        return await dev.controlTransferOut(setup);
+      }
+
+      async function vendorIn(req, value, index, length) {
+        const setup = {
+          requestType: "vendor",
+          recipient: "device",
+          request: req & 0xff,
+          value: value & 0xffff,
+          index: index & 0xffff,
+        };
+        return await dev.controlTransferIn(setup, length >>> 0);
+      }
+
+      async function connectWebUSB() {
+        try {
+          dev = await navigator.usb.requestDevice({
+            filters: [{ vendorId: VID, productId: PID }],
+          });
+
+          await dev.open();
+          if (dev.configuration === null) await dev.selectConfiguration(1);
+
+          dumpInterfaces(dev);
+
+          try {
+            await dev.claimInterface(USB_INTERFACE);
+          } catch {}
+
+          const en = await vendorOut(0x48, 0x0006, 0x0000);
+          log(
+            `Enable: OUT req=0x48 val=0x0006 idx=0x0000 => status=${en.status}`,
+          );
+
+          document.getElementById("connect").disabled = true;
+          document.getElementById("disconnect").disabled = false;
+          setDevStatus();
+
+          running = true;
+          log("Starting vendor poll loop...");
+
+          while (running) {
+            const res = await vendorIn(0xc2, 0x0000, 0x0000, 20);
+            if (res.status !== "ok") {
+              log("Poll status: " + res.status);
+              break;
+            }
+            const bytes = new Uint8Array(res.data.buffer);
+            lastInPre.textContent = toHex(bytes);
+            tickRate();
+            await sleep(POLL_MS);
+          }
+        } catch (e) {
+          log("Error: " + explainUsbError(e));
+          await disconnectWebUSB();
+        }
+      }
+
+      async function disconnectWebUSB() {
+        running = false;
+        try {
+          if (dev) {
+            try {
+              await dev.releaseInterface(USB_INTERFACE);
+            } catch {}
+            try {
+              await dev.close();
+            } catch {}
+          }
+        } finally {
+          dev = null;
+          document.getElementById("connect").disabled = false;
+          document.getElementById("disconnect").disabled = true;
+          rateEl.textContent = "";
+          lastInPre.textContent = "";
+          setDevStatus();
+          log("WebUSB: disconnected.");
+        }
+      }
+
+      document.getElementById("connect").onclick = connectWebUSB;
+      document.getElementById("disconnect").onclick = disconnectWebUSB;
+      setDevStatus();
+
+      // --- Known working buttons ---
+      document.getElementById("enableNow").onclick = async () => {
+        try {
+          if (!dev) throw new Error("not connected");
+          const en = await vendorOut(0x48, 0x0006, 0x0000);
+          log(
+            `Enable: OUT req=0x48 val=0x0006 idx=0x0000 => status=${en.status}`,
+          );
+        } catch (e) {
+          log("Enable error: " + explainUsbError(e));
+        }
+      };
+
+      document.getElementById("pollOnce").onclick = async () => {
+        try {
+          if (!dev) throw new Error("not connected");
+          const res = await vendorIn(0xc2, 0x0000, 0x0000, 20);
+          if (res.status !== "ok") throw new Error(`status=${res.status}`);
+          const bytes = new Uint8Array(res.data.buffer);
+          log(`PollOnce IN: ${toHex(bytes)}`);
+        } catch (e) {
+          log("PollOnce error: " + explainUsbError(e));
+        }
+      };
+
+      // --- Single-shot sender ---
+      document.getElementById("sendOne").onclick = async () => {
+        try {
+          if (!dev) throw new Error("not connected");
+
+          const dir = document.getElementById("oneDir").value;
+          const req = parseHexInt(document.getElementById("oneReq").value, 8);
+          const val = parseHexInt(document.getElementById("oneVal").value, 16);
+          const idx = parseHexInt(document.getElementById("oneIdx").value, 16);
+          const len = Number(document.getElementById("oneLen").value) >>> 0;
+          const dataStr = document.getElementById("oneData").value.trim();
+
+          if (dir === "in") {
+            const res = await vendorIn(req, val, idx, len);
+            if (res.status !== "ok") {
+              log(
+                `ONE IN req=0x${req.toString(16)} val=0x${val.toString(16)} idx=0x${idx.toString(16)} len=${len} => status=${res.status}`,
+              );
+              return;
+            }
+            const bytes = new Uint8Array(res.data.buffer);
+            log(
+              `ONE IN  req=0x${req.toString(16)} val=0x${val.toString(16)} idx=0x${idx.toString(16)} len=${len} => ${toHex(bytes)}`,
+            );
+          } else {
+            const data = dataStr ? parseHexBytes(dataStr) : null;
+            const res = await vendorOut(req, val, idx, data);
+            log(
+              `ONE OUT req=0x${req.toString(16)} val=0x${val.toString(16)} idx=0x${idx.toString(16)} dataLen=${data ? data.length : 0} => status=${res.status}`,
+            );
+          }
+        } catch (e) {
+          log("SendOne error: " + explainUsbError(e));
+        }
+      };
+
+      // --- CC byte dump (always uses len=1) ---
+      async function ccReadByte(addr, idx = 0) {
+        const res = await vendorIn(0xcc, addr & 0xffff, idx & 0xffff, 1);
+        if (res.status !== "ok")
+          throw new Error(
+            `CC status=${res.status} addr=0x${addr.toString(16)}`,
+          );
+        return new Uint8Array(res.data.buffer)[0];
+      }
+
+      document.getElementById("ccDump").onclick = async () => {
+        try {
+          if (!dev) throw new Error("not connected");
+          log("CC dump start (idx=0, addr 0x0000..0x00FF, len=1 each)");
+          const bytes = new Uint8Array(256);
+          for (let a = 0; a < 256; a++) {
+            bytes[a] = await ccReadByte(a, 0);
+            await sleep(2);
+          }
+          // Print 16 bytes per line
+          for (let base = 0; base < 256; base += 16) {
+            const line = bytes.slice(base, base + 16);
+            log(`CC ${base.toString(16).padStart(4, "0")}: ${toHex(line)}`);
+          }
+          log("CC dump done.");
+        } catch (e) {
+          log("CC dump error: " + explainUsbError(e));
+        }
+      };
+
+      // --- OUT probe: finds vendor OUT requests that succeed (status=ok) ---
+      async function probeOutRequests() {
+        if (!dev) throw new Error("not connected");
+
+        const delay = 10;
+
+        const reqStart = 0xb0;
+        const reqEnd = 0xff;
+
+        const vals = [0x0000, 0x0001, 0x0006, 0x0010, 0x0020];
+        const idxs = [0x0000, 0x0001, 0x0002, 0x0003];
+
+        const payloads = [
+          null,
+          new Uint8Array([0x00]),
+          new Uint8Array(2),
+          new Uint8Array(4),
+          new Uint8Array(8),
+          new Uint8Array(20),
+        ];
+
+        for (const p of payloads) {
+          if (p) for (let i = 0; i < p.length; i++) p[i] = i & 0xff;
+        }
+
+        log(
+          `OUT probe start: req=0x${reqStart.toString(16)}..0x${reqEnd.toString(16)} (logs only OK)`,
+        );
+
+        for (let req = reqStart; req <= reqEnd; req++) {
+          for (const val of vals) {
+            for (const idx of idxs) {
+              for (const data of payloads) {
+                try {
+                  const res = await vendorOut(req, val, idx, data);
+                  if (res.status === "ok") {
+                    log(
+                      `OK OUT req=0x${req.toString(16).padStart(2, "0")} ` +
+                        `val=0x${val.toString(16).padStart(4, "0")} idx=0x${idx.toString(16).padStart(4, "0")} ` +
+                        `len=${data ? data.length : 0} status=${res.status}`,
+                    );
+                  }
+                } catch {
+                  // ignore errors (most will stall)
+                }
+                await sleep(delay);
+              }
+            }
+          }
+        }
+
+        log("OUT probe done.");
+      }
+
+      document.getElementById("outProbe").onclick = async () => {
+        try {
+          await probeOutRequests();
+        } catch (e) {
+          log("OUT probe error: " + explainUsbError(e));
+        }
+      };
+
+      // --- Scanner (generic) ---
+      let scanning = false;
+
+      function makeOutPattern(name) {
+        if (name === "none") return null;
+        if (name === "zeros1") return new Uint8Array(1);
+        if (name === "zeros2") return new Uint8Array(2);
+        if (name === "zeros4") return new Uint8Array(4);
+        if (name === "zeros8") return new Uint8Array(8);
+        if (name === "zeros20") return new Uint8Array(20);
+        if (name === "inc8") {
+          const u = new Uint8Array(8);
+          for (let i = 0; i < u.length; i++) u[i] = i & 0xff;
+          return u;
+        }
+        if (name === "inc20") {
+          const u = new Uint8Array(20);
+          for (let i = 0; i < u.length; i++) u[i] = i & 0xff;
+          return u;
+        }
+        return null;
+      }
+
+      async function runScan(mode /* "in"|"out" */) {
+        if (!dev) throw new Error("not connected");
+        if (scanning) return;
+
+        scanning = true;
+        document.getElementById("stopScan").disabled = false;
+        document.getElementById("scanStatus").textContent = "running";
+
+        const delay = Math.max(
+          5,
+          Number(document.getElementById("scanDelay").value) || 25,
+        );
+
+        const [rqA, rqB] = parseRangeHex(
+          document.getElementById("scanReq").value,
+        );
+        const [vvA, vvB] = parseRangeHex(
+          document.getElementById("scanVal").value,
+        );
+        const [viA, viB] = parseRangeHex(
+          document.getElementById("scanIdx").value,
+        );
+
+        const lens = document
+          .getElementById("scanLens")
+          .value.split(/[\s,]+/)
+          .filter(Boolean)
+          .map((x) => Math.max(0, Math.min(4096, Number(x) | 0)));
+
+        const outPat = makeOutPattern(
+          document.getElementById("outPattern").value,
+        );
+
+        log(
+          `SCAN ${mode.toUpperCase()} start: req=0x${rqA.toString(16)}..0x${rqB.toString(16)} val=0x${vvA.toString(16)}..0x${vvB.toString(16)} idx=0x${viA.toString(16)}..0x${viB.toString(16)} delay=${delay}ms`,
+        );
+
+        try {
+          for (let req = rqA; scanning && req <= rqB; req++) {
+            for (let val = vvA; scanning && val <= vvB; val++) {
+              for (let idx = viA; scanning && idx <= viB; idx++) {
+                if (!scanning) break;
+
+                if (mode === "in") {
+                  for (const L of lens) {
+                    try {
+                      const res = await vendorIn(req, val, idx, L);
+                      if (res.status === "ok") {
+                        const bytes = new Uint8Array(res.data.buffer);
+                        const anyNonZero = bytes.some((b) => b !== 0);
+                        if (bytes.length && anyNonZero) {
+                          log(
+                            `HIT IN  req=0x${req.toString(16).padStart(2, "0")} val=0x${val.toString(16).padStart(4, "0")} idx=0x${idx.toString(16).padStart(4, "0")} len=${L} => ${toHex(bytes)}`,
+                          );
+                        }
+                      }
+                    } catch {
+                      // ignore
+                    }
+                    await sleep(delay);
+                    if (!scanning) break;
+                  }
+                } else {
+                  try {
+                    const res = await vendorOut(req, val, idx, outPat);
+                    if (res.status === "ok") {
+                      log(
+                        `OK  OUT req=0x${req.toString(16).padStart(2, "0")} val=0x${val.toString(16).padStart(4, "0")} idx=0x${idx.toString(16).padStart(4, "0")} dataLen=${outPat ? outPat.length : 0}`,
+                      );
+                    }
+                  } catch {
+                    // ignore
+                  }
+                  await sleep(delay);
+                }
+              }
+            }
+          }
+        } finally {
+          scanning = false;
+          document.getElementById("stopScan").disabled = true;
+          document.getElementById("scanStatus").textContent = "idle";
+          log(`SCAN ${mode.toUpperCase()} done.`);
+        }
+      }
+
+      document.getElementById("scanIn").onclick = async () => {
+        try {
+          await runScan("in");
+        } catch (e) {
+          log("ScanIN error: " + explainUsbError(e));
+        }
+      };
+
+      document.getElementById("scanOut").onclick = async () => {
+        try {
+          await runScan("out");
+        } catch (e) {
+          log("ScanOUT error: " + explainUsbError(e));
+        }
+      };
+
+      document.getElementById("stopScan").onclick = () => {
+        scanning = false;
+        log("Stop requested.");
+      };
+    </script>
+  </body>
+</html>
