@@ -1,0 +1,10 @@
+HOW TO USE SOFTWARE
+
+* Currently only supports ONE controller. Multiple controller support coming soon.
+
+1. Run and install included ViGEmBus driver.
+2. Plug in Xbox 360 Wireless controller via the Play and Charge cable.
+3. Download and run Zadig to replace the "Xbox 360 Wireless Controller via Play & Charge Kit" driver with the WinUSB driver.
+4. Run "X360_Over_PnC.exe"
+
+Congrats! You can now use your 360 Wireless controller over the Play and Charge cable.
